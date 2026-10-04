@@ -1,0 +1,18 @@
+[project]
+name = "llm-edge-quant"
+version = "0.1.0"
+description = "On-device quantized LLM, profiled on real Qualcomm hardware (Snapdragon via AI Hub)."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "transformers",
+    "datasets",
+    "accelerate",
+    "pandas",
+    "matplotlib",
+]
+
+# llama.cpp (Phase 2) is built from source, not pip — see src/quantize/build_and_quantize.sh
+# Phase 3 (Qualcomm AI Hub) deps are added when we get there:
+#   uv add qai-hub qai-hub-models

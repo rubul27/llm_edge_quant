@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+# models / artifacts (regenerable, too big for git)
+*.gguf
+*.safetensors
+*.bin
+models/
+llama.cpp/
+gguf/
+.ipynb_checkpoints/
+.DS_Store
