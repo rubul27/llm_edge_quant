@@ -122,10 +122,3 @@ python src/eval/degeneracy.py              # Phase 4  INT4 degeneracy check
 python src/viz/pareto.py                   # Phase 5  the Pareto chart
 ```
 
-## Résumé bullet
-
-> Quantized Qwen2.5-0.5B across FP16/INT8/INT4, measured the quality cost of each on WikiText-2,
-> and profiled the INT8 transformer on a real Snapdragon 8 Gen 3 NPU via Qualcomm AI Hub
-> (~13 ms / 128-token prefill in ~0.5 GB) — identifying Q4_K_M as the quality-per-byte ship point
-> (2.5× smaller than FP16 for +3.3% perplexity vs +14.9% for naive INT4) and debugging the on-device
-> export down to an unsupported `IsNaN` op in the attention mask.
