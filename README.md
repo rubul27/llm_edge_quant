@@ -9,24 +9,22 @@ operating point to ship on a phone, backed by numbers measured on actual silicon
 
 ![Quality vs size Pareto](results/pareto.png)
 
-## TL;DR — the ship point, now measured on hardware
+## TL;DR — the ship point
 
-- **FP16 does not fit.** It compiled to the Hexagon NPU but **exceeded the device's memory budget** on profiling.
-- **INT8 fits and runs:** the quantized transformer profiles at **~13.4 ms / 128-token prefill (~9,500 tok/s) in ~501 MB** on the real S24 NPU.
+- **INT8 runs on the phone NPU:** the quantized transformer backbone profiles at **~13.4 ms / 128-token prefill (~9,500 tok/s) in ~511 MB peak** on a real Samsung Galaxy S24, after exporting with eager attention to keep an unsupported op out of the graph.
 - **Q4_K_M is the quality ship point:** at **0.40 GB** it's 2.5× smaller than FP16 for only **+3.3%** perplexity, while naive 4-bit (Q4_0) is barely smaller yet degrades **4.5× more** (+14.9%). INT8 is near-lossless on quality but 33% larger than Q4_K_M.
 
-Net: ship a 4-bit weight format for the smallest footprint and best quality-per-byte; the
-on-device run proves full precision is not an option and that a sub-1 GB quantized model runs
-comfortably on a phone NPU.
+Net: ship a 4-bit weight format for the smallest footprint and best quality-per-byte; INT8 is
+the operating point proven here to run comfortably — sub-1 GB — on the phone NPU.
 
-## Why on-device ≠ server (demonstrated, not asserted)
+## Why on-device ≠ server (shown, not asserted)
 
-A GPU server has tens of GB of HBM; a phone NPU (Hexagon HTP) has a small, tightly-bounded
-memory budget, runs integer math, and validates a fixed op set. All three showed up as real
-results here: **FP16 exceeded NPU memory**; the model only ran after **quantizing to INT8**
-(~501 MB); and on-device composition initially failed on an **unsupported `IsNaN` op** emitted
-by the attention-mask code, which had to be removed (eager attention) before the Hexagon
-runtime would accept the graph.
+A GPU server has tens of GB of HBM; a phone NPU (Hexagon HTP) has a small memory budget, runs
+integer math, and validates a fixed op set. Two of those bit this project as real results: the
+backbone only composed on the NPU after **quantizing to INT8** (~511 MB) and after the ONNX
+export was switched to **eager attention** to keep an **unsupported `IsNaN` op** (from the SDPA
+attention-mask path) out of the graph — the export asserts zero `IsNaN` nodes before submitting.
+With both in place the INT8 graph compiled to QNN DLC and profiled on the real device.
 
 ## Results (all measured)
 
@@ -46,9 +44,10 @@ the in-track baseline (not the HF number below).
 
 | Model | Result |
 |-------|--------|
-| Pipeline check (MobileNet-V2) | 0.37 ms inference, ~195 MB peak |
-| Qwen-0.5B **FP16** → QNN DLC | compiled ✅ · profile **exceeded device memory** ❌ |
-| Qwen-0.5B **INT8** (backbone) → QNN DLC | **13.4 ms / 128-tok prefill · ~9,500 tok/s · 501 MB peak · cold load 11.8 s / warm 0.35 s** ✅ |
+| Qwen-0.5B **INT8** (backbone) → QNN DLC | **13.4 ms / 128-tok prefill · ~9,500 tok/s · 511 MB peak · cold load 11.3 s / warm 0.33 s** ✅ |
+
+Prefill of a 128-token input through the transformer backbone; INT8 weights + activations,
+compiled with `--target_runtime qnn_dlc`.
 
 ### FP16 baseline (HuggingFace quality anchors)
 
@@ -63,10 +62,12 @@ the in-track baseline (not the HF number below).
 
 1. **Nominal ≠ effective bits.** "4-bit" Q4_K_M measured **6.4 bits/weight**, not 4.0 — Qwen-0.5B's
    token-embedding table is ~28% of the model and is kept at higher precision. Small models compress worse.
-2. **Perplexity ≠ correctness.** FP16 scores a healthy 12.7 perplexity yet explains "KV cache" *wrong*,
-   which is why quality uses a task benchmark (HellaSwag) + qualitative check, not perplexity alone.
-3. **On-device deployment is op-gated.** The NPU rejected an `IsNaN` op (bool input, HTP validator
-   error 3110) from SDPA mask handling; switching to eager attention removed it and the graph then composed.
+2. **Perplexity ≠ correctness.** FP16 scores a healthy 12.7 perplexity yet explains "KV cache" *wrong*
+   (it describes a key-value store), which is why quality uses a task benchmark (HellaSwag) + a
+   qualitative check, not perplexity alone.
+3. **On-device deployment is op-gated.** SDPA's attention-mask path emits an `IsNaN` op that the
+   Hexagon HTP does not support, so the export switches to eager attention and verifies the exported
+   graph contains **zero `IsNaN` nodes** before submitting — the INT8 graph then compiled and ran.
 
 ## Method
 
@@ -85,16 +86,26 @@ the in-track baseline (not the HF number below).
   (HF-PPL and llama.cpp-PPL never mixed).
 - HellaSwag scorer is custom but **reproduces the published 0.49**, validating it for relative use
   (not leaderboard-comparable — stated).
-- All on-device numbers are from real hardware; the one profiling failure (FP16 memory) is reported, not hidden.
-- **Degeneracy check (INT4):** greedy generations across Q8_0 / Q4_K_M / Q4_0 showed **no repetition collapse** — distinct-4gram stayed ~0.92–0.94 for all three (a looping output would crater it), with **Q4_0 consistently lowest**, matching the perplexity ordering. Conclusion: Q4_K_M is safe; naive Q4_0 is measurably but not catastrophically worse.
+- On-device numbers are from real hardware (the AI Hub inference job on an actual S24), not estimates.
+- **Degeneracy check (INT4):** greedy generations across Q8_0 / Q4_K_M / Q4_0
+  (`results/generations_quant.md`) stayed **coherent with no repetition collapse** at any bit-width —
+  e.g. all three answer "the capital of France is" correctly and produce fluent multi-sentence
+  completions, with no looping. This is the qualitative signal; see limitations for the metric.
 
 ## Limitations & future work
 
 - The on-device number is **prefill** (128 tokens) through the **transformer backbone** (the final
   vocab projection / `lm_head` was dropped to isolate the backbone). Autoregressive **decode**
   tokens/sec (single-token step with KV cache) is the natural next measurement.
+- **FP16 was not profiled on-device in this run** — the on-device evidence here is that INT8 runs,
+  not a measured FP16 failure. Profiling the FP16 graph (expected to exceed the NPU memory budget at
+  ~2× the INT8 footprint) is future work.
 - On-device INT8 used a small **random-token calibration set** — fine for the latency/memory *cost*
   measured here; it is not a quality claim (quality comes from the GGUF track).
+- The degeneracy check is **qualitative** as run: the distinct-4gram metric didn't register because
+  the verbose `llama-cli` banner-stripping also removed the generated text before scoring. Wiring the
+  metric to the captured transcript is a small fix and future work; the transcripts themselves already
+  show no collapse.
 - Quantized-model HellaSwag and CPU tokens/sec are future work.
 - v1 uses 0.5B; a 1.5B model would show a better compression ratio (smaller embedding fraction).
 
@@ -113,8 +124,8 @@ python src/viz/pareto.py                   # Phase 5  the Pareto chart
 
 ## Résumé bullet
 
-> Quantized Qwen2.5-0.5B across FP16/INT8/INT4 and profiled it on a real Snapdragon 8 Gen 3 NPU
-> via Qualcomm AI Hub: INT8 runs the transformer at ~13 ms / 128-token prefill in ~0.5 GB while
-> FP16 exceeded device memory, and Q4_K_M is the quality ship point (2.5× smaller, +3.3% perplexity
-> vs +14.9% for naive INT4) — debugging the on-device deployment down to an unsupported `IsNaN` op
-> in the attention mask.
+> Quantized Qwen2.5-0.5B across FP16/INT8/INT4, measured the quality cost of each on WikiText-2,
+> and profiled the INT8 transformer on a real Snapdragon 8 Gen 3 NPU via Qualcomm AI Hub
+> (~13 ms / 128-token prefill in ~0.5 GB) — identifying Q4_K_M as the quality-per-byte ship point
+> (2.5× smaller than FP16 for +3.3% perplexity vs +14.9% for naive INT4) and debugging the on-device
+> export down to an unsupported `IsNaN` op in the attention mask.
