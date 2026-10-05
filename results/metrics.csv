@@ -1,0 +1,26 @@
+model,precision,metric,value,note
+Qwen/Qwen2.5-0.5B-Instruct,fp16,params_millions,494.0,measured
+Qwen/Qwen2.5-0.5B-Instruct,fp16,weights_gb_fp16,0.99,measured
+Qwen/Qwen2.5-0.5B-Instruct,fp16,wikitext2_ppl,12.665,HF win2048_stride1024
+Qwen/Qwen2.5-0.5B-Instruct,fp16,hellaswag_acc_norm,0.495,HF val_n1000_seed0
+Qwen/Qwen2.5-0.5B-Instruct,f16,gguf_size_gb,0.994,qwen-0.5b-f16.gguf
+Qwen/Qwen2.5-0.5B-Instruct,q8_0,gguf_size_gb,0.531,qwen-0.5b-q8_0.gguf
+Qwen/Qwen2.5-0.5B-Instruct,q4_k_m,gguf_size_gb,0.398,qwen-0.5b-q4_k_m.gguf
+Qwen/Qwen2.5-0.5B-Instruct,q4_0,gguf_size_gb,0.352,qwen-0.5b-q4_0.gguf
+Qwen/Qwen2.5-0.5B-Instruct,f16,gguf_bits_per_weight,16.10,file_bytes/param
+Qwen/Qwen2.5-0.5B-Instruct,q8_0,gguf_bits_per_weight,8.60,file_bytes/param
+Qwen/Qwen2.5-0.5B-Instruct,q4_k_m,gguf_bits_per_weight,6.44,file_bytes/param
+Qwen/Qwen2.5-0.5B-Instruct,q4_0,gguf_bits_per_weight,5.70,file_bytes/param
+Qwen/Qwen2.5-0.5B-Instruct,f16,gguf_wikitext2_ppl,14.927,llama.cpp c512_chunks200
+Qwen/Qwen2.5-0.5B-Instruct,q8_0,gguf_wikitext2_ppl,14.981,llama.cpp c512_chunks200
+Qwen/Qwen2.5-0.5B-Instruct,q4_k_m,gguf_wikitext2_ppl,15.416,llama.cpp c512_chunks200
+Qwen/Qwen2.5-0.5B-Instruct,q4_0,gguf_wikitext2_ppl,17.144,llama.cpp c512_chunks200
+Qwen/Qwen2.5-0.5B-Instruct,fp16,aihub_s24_profile,failed,qnn_dlc compiled but profile exceeded NPU device memory
+Qwen/Qwen2.5-0.5B-Instruct,int8,aihub_s24_prefill_ms,13.4,backbone 128-tok prefill; eager-attn; Snapdragon 8 Gen 3 NPU
+Qwen/Qwen2.5-0.5B-Instruct,int8,aihub_s24_prefill_tok_per_s,9534,128 tokens / 13.4 ms prefill
+Qwen/Qwen2.5-0.5B-Instruct,int8,aihub_s24_peak_mem_mb,501,inference peak (fits; FP16 did not)
+Qwen/Qwen2.5-0.5B-Instruct,int8,aihub_s24_cold_load_s,11.8,first load (one-time)
+Qwen/Qwen2.5-0.5B-Instruct,int8,aihub_s24_warm_load_ms,345,warm load
+Qwen/Qwen2.5-0.5B-Instruct,q8_0,degeneracy_no_collapse,true,greedy n80; distinct-4gram ~0.93
+Qwen/Qwen2.5-0.5B-Instruct,q4_k_m,degeneracy_no_collapse,true,greedy n80; distinct-4gram ~0.93
+Qwen/Qwen2.5-0.5B-Instruct,q4_0,degeneracy_no_collapse,true,greedy n80; distinct-4gram ~0.92 (lowest, matches PPL)
