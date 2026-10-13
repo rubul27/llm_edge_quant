@@ -11,20 +11,27 @@ operating point to ship on a phone, backed by numbers measured on actual silicon
 
 ## TL;DR — the ship point
 
+- **FP16 does not fit on the phone NPU:** the FP16 model compiled to QNN DLC for the Snapdragon 8 Gen 3, but profiling on the real S24 failed with *"memory usage exceeded device limits"*.
 - **INT8 runs on the phone NPU:** the quantized transformer backbone profiles at **~13.4 ms / 128-token prefill (~9,500 tok/s) in ~511 MB peak** on a real Samsung Galaxy S24, after exporting with eager attention to keep an unsupported op out of the graph.
 - **Q4_K_M is the quality ship point:** at **0.40 GB** it's 2.5× smaller than FP16 for only **+3.3%** perplexity, while naive 4-bit (Q4_0) is barely smaller yet degrades **4.5× more** (+14.9%). INT8 is near-lossless on quality but 33% larger than Q4_K_M.
 
 Net: ship a 4-bit weight format for the smallest footprint and best quality-per-byte; INT8 is
-the operating point proven here to run comfortably — sub-1 GB — on the phone NPU.
+the operating point proven here to run comfortably — sub-1 GB — on the phone NPU, where FP16 did not.
 
 ## Why on-device ≠ server (shown, not asserted)
 
 A GPU server has tens of GB of HBM; a phone NPU (Hexagon HTP) has a small memory budget, runs
-integer math, and validates a fixed op set. Two of those bit this project as real results: the
-backbone only composed on the NPU after **quantizing to INT8** (~511 MB) and after the ONNX
-export was switched to **eager attention** to keep an **unsupported `IsNaN` op** (from the SDPA
-attention-mask path) out of the graph — the export asserts zero `IsNaN` nodes before submitting.
-With both in place the INT8 graph compiled to QNN DLC and profiled on the real device.
+integer math, and validates a fixed op set. All three bit this project as real results:
+
+- **Memory:** the FP16 model compiled for the NPU but **exceeded the device's memory limit** at
+  runtime; the model only ran after **quantizing to INT8** (~511 MB peak).
+- **Op support:** the SDPA attention-mask path emits an **unsupported `IsNaN` op**, which made the
+  INT8 graph fail to compose on the NPU (`MODEL_GRAPH_ERROR`). Switching the ONNX export to
+  **eager attention** removed it — the export asserts zero `IsNaN` nodes before submitting.
+- **Data types:** the runtime rejected float16 initializers and 64-bit intermediate tensors, so the
+  INT8 path quantizes from an FP32 export and compiles with `--truncate_64bit_tensors`.
+
+With these in place, the INT8 graph compiled to QNN DLC and profiled on the real device.
 
 ## Results (all measured)
 
@@ -44,10 +51,12 @@ the in-track baseline (not the HF number below).
 
 | Model | Result |
 |-------|--------|
-| Qwen-0.5B **INT8** (backbone) → QNN DLC | **13.4 ms / 128-tok prefill · ~9,500 tok/s · 511 MB peak · cold load 11.3 s / warm 0.33 s** ✅ |
+| Qwen-0.5B **FP16** (full model incl. `lm_head`, SDPA) → QNN DLC | Compiled ✅ · profiling **failed: memory usage exceeded device limits** ❌ (jobs `jp4yqm31p` / `jpxlv3llp`) |
+| Qwen-0.5B **INT8** (backbone, eager attention) → QNN DLC | **13.4 ms / 128-tok prefill · ~9,500 tok/s · 511 MB peak · cold load 11.3 s / warm 0.33 s** ✅ (job `jgzl99865`) |
 
-Prefill of a 128-token input through the transformer backbone; INT8 weights + activations,
-compiled with `--target_runtime qnn_dlc`.
+INT8 row: prefill of a 128-token input through the transformer backbone; INT8 weights + activations,
+compiled with `--target_runtime qnn_dlc`. The two rows are **not the same graph** (the FP16 run
+includes `lm_head` and SDPA attention) — see Limitations.
 
 ### FP16 baseline (HuggingFace quality anchors)
 
@@ -60,14 +69,17 @@ compiled with `--target_runtime qnn_dlc`.
 
 ## Three engineering findings
 
-1. **Nominal ≠ effective bits.** "4-bit" Q4_K_M measured **6.4 bits/weight**, not 4.0 — Qwen-0.5B's
-   token-embedding table is ~28% of the model and is kept at higher precision. Small models compress worse.
+1. **Nominal ≠ effective bits.** "4-bit" Q4_K_M measured **6.4 bits/weight**, not 4.0, for two reasons:
+   the token-embedding table (~28% of the model) is stored at Q8_0, and **144 of 290 tensors fell back**
+   from Q4_K to Q5_0/Q8_0 because Qwen-0.5B's hidden size (896) is not divisible by the 256-element
+   K-quant block size. Small models compress worse.
 2. **Perplexity ≠ correctness.** FP16 scores a healthy 12.7 perplexity yet explains "KV cache" *wrong*
    (it describes a key-value store), which is why quality uses a task benchmark (HellaSwag) + a
    qualitative check, not perplexity alone.
-3. **On-device deployment is op-gated.** SDPA's attention-mask path emits an `IsNaN` op that the
-   Hexagon HTP does not support, so the export switches to eager attention and verifies the exported
-   graph contains **zero `IsNaN` nodes** before submitting — the INT8 graph then compiled and ran.
+3. **On-device deployment is memory- and op-gated.** FP16 compiled but exceeded the NPU's memory limit
+   at runtime, and SDPA's attention-mask path emits an `IsNaN` op that the Hexagon HTP does not support.
+   Quantizing to INT8 and exporting with eager attention (verified **zero `IsNaN` nodes** before
+   submitting) solved both — the INT8 graph then compiled and ran.
 
 ## Method
 
@@ -77,7 +89,7 @@ compiled with `--target_runtime qnn_dlc`.
   and `llama-perplexity` for the GGUF perplexity ladder.
 - **On-device:** export to ONNX (eager attention, backbone), package with external weights,
   `qai-hub` INT8 quantize-job → compile `--target_runtime qnn_dlc --truncate_64bit_tensors` →
-  profile on a real S24. Full journey in `src/deploy/AIHUB_NOTES.md`.
+  profile on a real S24. Full journey, including the FP16 memory failure, in `src/deploy/AIHUB_NOTES.md`.
 - **Trade-off:** `src/viz/pareto.py` renders `results/pareto.png` from `results/metrics.csv`.
 
 ## Reliability / honesty checks
@@ -86,7 +98,8 @@ compiled with `--target_runtime qnn_dlc`.
   (HF-PPL and llama.cpp-PPL never mixed).
 - HellaSwag scorer is custom but **reproduces the published 0.49**, validating it for relative use
   (not leaderboard-comparable — stated).
-- On-device numbers are from real hardware (the AI Hub inference job on an actual S24), not estimates.
+- On-device numbers are from real hardware (AI Hub inference jobs on an actual S24), not estimates.
+  Job IDs are listed so each result can be traced.
 - **Degeneracy check (INT4):** greedy generations across Q8_0 / Q4_K_M / Q4_0
   (`results/generations_quant.md`) stayed **coherent with no repetition collapse** at any bit-width —
   e.g. all three answer "the capital of France is" correctly and produce fluent multi-sentence
@@ -97,9 +110,11 @@ compiled with `--target_runtime qnn_dlc`.
 - The on-device number is **prefill** (128 tokens) through the **transformer backbone** (the final
   vocab projection / `lm_head` was dropped to isolate the backbone). Autoregressive **decode**
   tokens/sec (single-token step with KV cache) is the natural next measurement.
-- **FP16 was not profiled on-device in this run** — the on-device evidence here is that INT8 runs,
-  not a measured FP16 failure. Profiling the FP16 graph (expected to exceed the NPU memory budget at
-  ~2× the INT8 footprint) is future work.
+- **FP16 vs INT8 on-device is not a like-for-like comparison.** The FP16 run that exceeded device
+  memory was the full model (backbone + `lm_head`, SDPA attention), while the INT8 run was the
+  backbone only with eager attention. The FP16 failure is direct evidence that FP16 does not fit the
+  NPU's deployable memory, but profiling the **FP16 eager backbone** (same graph as the INT8 run)
+  would make the comparison exact.
 - On-device INT8 used a small **random-token calibration set** — fine for the latency/memory *cost*
   measured here; it is not a quality claim (quality comes from the GGUF track).
 - The degeneracy check is **qualitative** as run: the distinct-4gram metric didn't register because
@@ -107,7 +122,8 @@ compiled with `--target_runtime qnn_dlc`.
   metric to the captured transcript is a small fix and future work; the transcripts themselves already
   show no collapse.
 - Quantized-model HellaSwag and CPU tokens/sec are future work.
-- v1 uses 0.5B; a 1.5B model would show a better compression ratio (smaller embedding fraction).
+- v1 uses 0.5B; a 1.5B model would show a better compression ratio (smaller embedding fraction, and a
+  hidden size that divides evenly into K-quant blocks).
 
 ## Reproduce
 
@@ -121,4 +137,3 @@ python src/deploy/aihub_profile.py         # Phase 3  compile + profile on real 
 python src/eval/degeneracy.py              # Phase 4  INT4 degeneracy check
 python src/viz/pareto.py                   # Phase 5  the Pareto chart
 ```
-
